@@ -1,4 +1,19 @@
 <?php
+$mysqli = new mysqli("localhost", "root", "", "test");
+if ($mysqli->connect_error) {
+    die("Connection failed: " . $mysqli->connect_error);
+}
+
+// Example of querying data and sending it
+$query = "SELECT * FROM comments";
+$result = $mysqli->query($query);
+$data = $result->fetch_all(MYSQLI_ASSOC);
+foreach ($data as $row) {
+    $json = json_encode($row);
+    $response = chr(129) . chr(strlen($json)) . $json;
+    fwrite($client, $response);
+}
+
 // webserver in php
 set_time_limit(0);
 $host = '127.0.0.1';
