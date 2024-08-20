@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebSocket Comments</title>
+    <script src="/socket.io/socket.io.js"></script>
+  </head>
+  <body>
+    <h1>Comments</h1>
+    <form id="commentForm">
+      <input type="text" id="name" placeholder="Your Name" required />
+      <textarea id="message" placeholder="Your Comment" required></textarea>
+      <button type="submit">Add Comment</button>
+    </form>
+    <div id="comments"></div>
+
+    <script>
+      const socket = io("http://localhost:8081");
+
+      const commentForm = document.getElementById("commentForm");
+      const nameInput = document.getElementById("name");
+      const messageInput = document.getElementById("message");
+      const commentsDiv = document.getElementById("comments");
+
+      // Handle form submission
+      commentForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const name = nameInput.value.trim();
+        const message = messageInput.value.trim();
+        if (name && message) {
+          socket.emit("comment", `${name}: ${message}`);
+          nameInput.value = "";
+          messageInput.value = "";
+        }
+      });
+
+      // Listen for new comments from the server
+      socket.on("comment", (msg) => {
+        const p = document.createElement("p");
+        p.textContent = msg;
+        commentsDiv.appendChild(p);
+      });
+
+      // Fetch existing comments on page load
+      fetch("http://localhost/test/websocket/node/api.php")
+        .then((response) => response.json())
+        .then((data) => {
+          data.forEach((comment) => {
+            const p = document.createElement("p");
+            p.textContent = `${comment.name}: ${comment.message}`;
+            commentsDiv.appendChild(p);
+          });
+        })
+        .catch((error) => console.error("Error fetching comments:", error));
+    </script>
+  </body>
+</html>

@@ -2,34 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>websocket client</title>
+    <title>WebSocket Client</title>
     <script>
-      document.addEventListener("DOMContentLoaded", function () {
-        var ws = new WebSocket("ws://127.0.0.1:8080");
+      const ws = new WebSocket("ws://localhost:8081");
 
-        ws.onopen = function () {
-          console.log("WebSocket connection established");
-          ws.send("Hello Server");
-        };
+      ws.onmessage = function (event) {
+        document.body.innerHTML += event.data + "<br>";
+      };
 
-        ws.onmessage = function (event) {
-          console.log("Message from server:", event.data);
-          document.getElementById("messages").textContent += event.data + "\n";
-        };
+      ws.onerror = function (event) {
+        console.error("WebSocket error observed:", event);
+      };
 
-        ws.onclose = function () {
-          console.log("WebSocket connection closed");
-        };
+      ws.onopen = function () {
+        console.log("WebSocket connection established");
+      };
 
-        ws.onerror = function (error) {
-          console.log("WebSocket error:", error);
-        };
-      });
+      ws.onclose = function () {
+        console.log("WebSocket connection closed");
+      };
     </script>
   </head>
-  <body>
-    <h1>WebSocket Client</h1>
-    <div id="messages"></div>
-  </body>
+  <body></body>
 </html>

@@ -1,64 +1,64 @@
 <?php
-$mysqli = new mysqli("localhost", "root", "", "test");
-if ($mysqli->connect_error) {
-    die("Connection failed: " . $mysqli->connect_error);
-}
+$host = 'localhost';
+$port = 8081;
 
-// Example of querying data and sending it
-$query = "SELECT * FROM comments";
-$result = $mysqli->query($query);
-$data = $result->fetch_all(MYSQLI_ASSOC);
-foreach ($data as $row) {
-    $json = json_encode($row);
-    $response = chr(129) . chr(strlen($json)) . $json;
-    fwrite($client, $response);
-}
-
-// webserver in php
-set_time_limit(0);
-$host = '127.0.0.1';
-$port = 8080;
-
-// create websocket server
+// Create WebSocket server
 $server = stream_socket_server("tcp://$host:$port", $errno, $errorMessage);
 if (!$server) {
-    die("Failed to create socket: $errorMessage");
+    die("Error creating server: $errorMessage\n");
 }
 
-echo "Websocket server started at ws://$host:$port\n";
+echo "WebSocket server running on ws://$host:$port\n";
 
 while (true) {
-    // Accept incoming message
-    $client = stream_socket_accept($server);
+    $client = @stream_socket_accept($server, -1);
     if ($client) {
-        // perform websocket handshake
         $headers = fread($client, 1024);
-        $headers = explode("\r\n", $headers);
-        foreach ($headers as $header) {
-            if (strpos($header, 'Sec-Websocket-key:') !== false) {
-                $key = trim(substr($header, 17));
-            }
-        }
-        $accept = base64_encode(sha1($key, '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', true));
-        $response = "HTTP/1.1 101 Switching Protocols\r\n" .
-            "Upgrade: websocket\r\n" .
-            "Connection: Upgrade\r\n" .
-            "Sec-WebSocket-Accept: $accept\r\n\r\n";
-        fwrite($client, $response);
+        preg_match('#Sec-WebSocket-Key: (.*)\r\n#', $headers, $matches);
 
-        // Read data from client and send a response
-        while (!feof($client)) {
-            $data = fread($client, 1024);
-            if ($data) {
-                // Decode WebSocket frame
-                $frame = ord($data[1]) & 127;
-                $text = substr($data, 6, $frame);
-                // Send a response (for example, echoing the received data)
-                $response = chr(129) . chr(strlen($text)) . $text;
-                fwrite($client, $response);
+        if (isset($matches[1])) {
+            $secKey = trim($matches[1]);
+            $secAccept = base64_encode(pack('H*', sha1($secKey . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')));
+
+            $handshakeResponse = "HTTP/1.1 101 Switching Protocols\r\n" .
+                "Upgrade: websocket\r\n" .
+                "Connection: Upgrade\r\n" .
+                "Sec-WebSocket-Accept: $secAccept\r\n\r\n";
+            fwrite($client, $handshakeResponse);
+
+            // Connect to MySQL database
+            $conn = new mysqli("localhost", "root", "", "test");
+            if ($conn->connect_error) {
+                die("Connection failed: " . $conn->connect_error);
+            }
+
+            while (true) {
+                // Fetch data from the comments table
+                $result = $conn->query("SELECT name, message, created_at FROM comments");
+                while ($row = $result->fetch_assoc()) {
+                    $msg = "Name: " . $row['name'] . " | Message: " . $row['message'] . " | Created at: " . $row['created_at'];
+                    sendWebSocketMessage($client, $msg);
+                }
+                sleep(10); // Wait for 10 seconds before fetching data again
             }
         }
+
         fclose($client);
     }
 }
+
 fclose($server);
+
+// Function to send a WebSocket message
+function sendWebSocketMessage($client, $message) {
+    $length = strlen($message);
+    $header = chr(0x81); // Text frame, FIN bit set
+    if ($length <= 125) {
+        $header .= chr($length);
+    } elseif ($length >= 126 && $length <= 65535) {
+        $header .= chr(126) . pack('n', $length);
+    } else {
+        $header .= chr(127) . pack('J', $length);
+    }
+    fwrite($client, $header . $message);
+}
