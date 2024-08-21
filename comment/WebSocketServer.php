@@ -4,108 +4,168 @@ class WebSocketServer
     private $host = 'localhost';
     private $port = 8081;
     private $clients = [];
-    private $db;
 
     public function __construct()
     {
-        // Create a new mysqli connection
-        $this->db = new mysqli('localhost', 'root', '', 'test');
-        if ($this->db->connect_error) {
-            die("Database connection failed: " . $this->db->connect_error);
-        }
-    }
-
-    public function run()
-    {
-        $server = stream_socket_server("tcp://{$this->host}:{$this->port}", $errno, $errorMessage);
-        if (!$server) {
-            die("Error creating server: $errorMessage\n");
+        $serverSocket = stream_socket_server("tcp://{$this->host}:{$this->port}", $errno, $errstr);
+        if (!$serverSocket) {
+            die("Error creating server: $errstr ($errno)\n");
         }
 
         echo "WebSocket server running on ws://{$this->host}:{$this->port}\n";
 
+        $this->acceptClients($serverSocket);
+    }
+
+    private function acceptClients($serverSocket)
+    {
         while (true) {
-            $read = $this->clients;
-            $read[] = $server;
+            $clientSocket = stream_socket_accept($serverSocket, -1);
+            if ($clientSocket) {
+                $this->performHandshake($clientSocket);
+                $this->clients[] = $clientSocket;
 
-            if (stream_select($read, $write, $except, null) > 0) {
-                if (in_array($server, $read)) {
-                    $client = stream_socket_accept($server);
-                    if ($client) {
-                        $this->clients[] = $client;
-                        $this->performHandshake($client);
-                    }
-                    $read = array_diff($read, [$server]);
-                }
-
-                foreach ($read as $socket) {
-                    if ($socket !== $server) {
-                        $data = fread($socket, 1024);
-                        if ($data) {
-                            $this->handleClientMessage($data, $socket);
-                        }
-                    }
-                }
+                $this->listenToClients($clientSocket);
             }
-
-            // Remove disconnected clients
-            foreach ($this->clients as $key => $client) {
-                if (feof($client)) {
-                    fclose($client);
-                    unset($this->clients[$key]);
-                }
-            }
-        }
-
-        fclose($server);
-    }
-
-    private function performHandshake($client)
-    {
-        $headers = fread($client, 1024);
-        preg_match('#Sec-WebSocket-Key: (.*)\r\n#', $headers, $matches);
-
-        if (isset($matches[1])) {
-            $secKey = trim($matches[1]);
-            $secAccept = base64_encode(pack('H*', sha1($secKey . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')));
-
-            $handshakeResponse = "HTTP/1.1 101 Switching Protocols\r\n" .
-                "Upgrade: websocket\r\n" .
-                "Connection: Upgrade\r\n" .
-                "Sec-WebSocket-Accept: $secAccept\r\n\r\n";
-            fwrite($client, $handshakeResponse);
         }
     }
 
-    private function handleClientMessage($data, $socket)
+    private function performHandshake($clientSocket)
     {
-        $message = '';
-        if (ord($data[0]) === 129) {
-            $length = ord($data[1]) & 127;
-            if ($length === 126) {
-                $length = unpack('n', substr($data, 2, 2))[1];
-            } elseif ($length === 127) {
-                $length = unpack('J', substr($data, 2, 8))[1];
-            }
-            $message = substr($data, 2 + ($length > 125 ? ($length === 126 ? 2 : 8) : 0), $length);
+        $request = fread($clientSocket, 1024);
+        preg_match('#Sec-WebSocket-Key: (.*)\r\n#', $request, $matches);
+        $key = base64_encode(pack('H*', sha1(trim($matches[1]) . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')));
 
-            // Broadcast the message to all clients
-            foreach ($this->clients as $client) {
-                if ($client !== $socket) {
-                    fwrite($client, chr(129) . chr(strlen($message)) . $message);
-                }
+        $headers = "HTTP/1.1 101 Switching Protocols\r\n" .
+            "Upgrade: websocket\r\n" .
+            "Connection: Upgrade\r\n" .
+            "Sec-WebSocket-Accept: $key\r\n\r\n";
+        fwrite($clientSocket, $headers);
+    }
+
+    private function listenToClients($clientSocket)
+    {
+        while (true) {
+            $data = fread($clientSocket, 1024);
+            if (!$data) {
+                fclose($clientSocket);
+                $this->clients = array_filter($this->clients, function ($client) use ($clientSocket) {
+                    return $client !== $clientSocket;
+                });
+                break;
             }
 
-            // Optionally, save the comment to the database here
-            // $this->saveCommentToDatabase($message);
+            $message = $this->unmask($data);
+            $this->handleMessage($clientSocket, $message);
         }
     }
 
-    private function saveCommentToDatabase($comment)
+    private function handleMessage($clientSocket, $message)
     {
-        $stmt = $this->db->prepare("INSERT INTO comments (message) VALUES (?)");
-        $stmt->bind_param("s", $comment);
-        $stmt->execute();
-        $stmt->close();
+        $jsonMessage = json_decode($message, true);
+        $action = $jsonMessage['action'] ?? '';
+
+        if ($action == 'add_data') {
+            $table = $jsonMessage['table'] ?? '';
+            $data = $jsonMessage['data'] ?? [];
+            $this->addData($table, $data);
+            $this->broadcastMessage(json_encode([
+                'action' => 'new_data',
+                'table' => $table,
+                'data' => $data,
+            ]));
+        } elseif ($action == 'get_data') {
+            $table = $jsonMessage['table'] ?? '';
+            $data = $this->getData($table);
+            fwrite($clientSocket, $this->mask(json_encode([
+                'action' => 'data_list',
+                'table' => $table,
+                'data' => $data,
+            ])));
+        }
+    }
+
+    private function addData($table, $data)
+    {
+        $conn = new mysqli("localhost", "root", "", "test");
+        if ($conn->connect_error) {
+            die("Connection failed: " . $conn->connect_error);
+        }
+
+        $columns = implode(", ", array_keys($data));
+        $values = implode("', '", array_map([$conn, 'real_escape_string'], array_values($data)));
+        $query = "INSERT INTO $table ($columns) VALUES ('$values')";
+
+        $conn->query($query);
+        $conn->close();
+    }
+
+    private function getData($table)
+    {
+        $conn = new mysqli("localhost", "root", "", "test");
+        if ($conn->connect_error) {
+            die("Connection failed: " . $conn->connect_error);
+        }
+
+        $result = $conn->query("SELECT * FROM $table ORDER BY id DESC");
+        $data = [];
+        while ($row = $result->fetch_assoc()) {
+            $data[] = $row;
+        }
+
+        $conn->close();
+        return $data;
+    }
+
+    private function broadcastMessage($message)
+    {
+        foreach ($this->clients as $client) {
+            fwrite($client, $this->mask($message));
+        }
+    }
+
+    private function unmask($payload)
+    {
+        $length = ord($payload[1]) & 127;
+        if ($length == 126) {
+            $masks = substr($payload, 4, 4);
+            $data = substr($payload, 8);
+        } elseif ($length == 127) {
+            $masks = substr($payload, 10, 4);
+            $data = substr($payload, 14);
+        } else {
+            $masks = substr($payload, 2, 4);
+            $data = substr($payload, 6);
+        }
+        $text = '';
+        for ($i = 0; $i < strlen($data); ++$i) {
+            $text .= $data[$i] ^ $masks[$i % 4];
+        }
+        return $text;
+    }
+
+    private function mask($text)
+    {
+        $b1 = 0x80 | (0x1 & 0x0f);
+        $length = strlen($text);
+
+        if ($length <= 125) {
+            $header = pack('CC', $b1, $length);
+        } elseif ($length > 125 && $length < 65536) {
+            $header = pack('CCn', $b1, 126, $length);
+        } elseif ($length >= 65536) {
+            $header = pack('CCNN', $b1, 127, $length);
+        }
+
+        return $header . $text;
+    }
+
+    public function run()
+    {
+        // Just calling the constructor starts the server
     }
 }
+
+// To use the WebSocket server, create an instance of the class and call run()
+$server = new WebSocketServer();
+$server->run();

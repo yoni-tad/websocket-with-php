@@ -3,100 +3,72 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebSocket and HTTP API Example</title>
+    <title>General WebSocket Client</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-        #comments {
-            margin-top: 20px;
-        }
-        .comment-box {
-            border: 1px solid #ddd;
+        #dataList {
+            max-width: 600px;
+            margin: 20px auto;
             padding: 10px;
-            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+
+        .data-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
         }
     </style>
 </head>
 <body>
-    <h1>WebSocket and HTTP API Example</h1>
+    <h1>General WebSocket Client</h1>
+    <div id="dataList"></div>
 
-    <!-- Form to add comments -->
-    <form id="commentForm">
-        <label for="message">Add a Comment:</label><br>
-        <textarea id="message" name="message" rows="4" cols="50"></textarea><br>
-        <button type="submit">Submit</button>
+    <form id="dataForm">
+        <input type="text" id="name" placeholder="Name">
+        <input type="text" id="message" placeholder="Message">
+        <button type="submit">Add Data</button>
     </form>
 
-    <!-- Section to display comments -->
-    <div id="comments">
-        <h2>Comments</h2>
-        <!-- Comments will be added here dynamically -->
-    </div>
-
     <script>
-        // WebSocket connection
         const ws = new WebSocket('ws://localhost:8081');
+        const dataList = document.getElementById('dataList');
 
         ws.onopen = () => {
             console.log('Connected to WebSocket server');
+            ws.send(JSON.stringify({ action: 'get_data', table: 'comments' }));
         };
 
         ws.onmessage = (event) => {
-            // Append new message to the comments section
-            const commentsDiv = document.getElementById('comments');
-            const newComment = document.createElement('div');
-            newComment.classList.add('comment-box');
-            newComment.textContent = event.data;
-            commentsDiv.appendChild(newComment);
+            const response = JSON.parse(event.data);
+
+            if (response.action === 'data_list') {
+                dataList.innerHTML = '';
+                response.data.forEach(item => {
+                    const div = document.createElement('div');
+                    div.classList.add('data-item');
+                    div.textContent = `Name: ${item.name}, Message: ${item.message}`;
+                    dataList.appendChild(div);
+                });
+            }
+
+            if (response.action === 'new_data') {
+                const div = document.createElement('div');
+                div.classList.add('data-item');
+                div.textContent = `Name: ${response.data.name}, Message: ${response.data.message}`;
+                dataList.appendChild(div);
+            }
         };
 
-        ws.onclose = () => {
-            console.log('Connection closed');
-        };
-
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-        };
-
-        // Handle form submission
-        document.getElementById('commentForm').addEventListener('submit', (event) => {
-            event.preventDefault();
-
+        document.getElementById('dataForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('name').value;
             const message = document.getElementById('message').value;
 
-            fetch('api.php', {  // Ensure the path to api.php is correct
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: new URLSearchParams({
-                    'message': message,
-                }),
-            })
-            .then(response => response.text())
-            .then(data => {
-                console.log(data);
-                document.getElementById('message').value = ''; // Clear the form
-            })
-            .catch(error => console.error('Error adding comment:', error));
-        });
-
-        // Fetch and display comments on page load
-        window.addEventListener('load', () => {
-            fetch('api.php?endpoint=get_comments')  // Ensure the path and query are correct
-                .then(response => response.json())
-                .then(comments => {
-                    const commentsDiv = document.getElementById('comments');
-                    comments.forEach(comment => {
-                        const commentBox = document.createElement('div');
-                        commentBox.classList.add('comment-box');
-                        commentBox.textContent = comment;
-                        commentsDiv.appendChild(commentBox);
-                    });
-                })
-                .catch(error => console.error('Error fetching comments:', error));
+            ws.send(JSON.stringify({
+                action: 'add_data',
+                table: 'comments',
+                data: { name, message }
+            }));
         });
     </script>
 </body>
